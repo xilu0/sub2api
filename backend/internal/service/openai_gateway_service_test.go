@@ -270,6 +270,9 @@ func (c *stubGatewayCache) RefreshSessionTTL(ctx context.Context, groupID int64,
 	return nil
 }
 
+func (c *stubGatewayCache) SetSessionAccountIDIfBetter(ctx context.Context, groupID int64, sessionHash string, accountID int64, priority int, ttl time.Duration) (bool, error) {
+	return true, c.SetSessionAccountID(ctx, groupID, sessionHash, accountID, ttl)
+}
 func (c *stubGatewayCache) DeleteSessionAccountID(ctx context.Context, groupID int64, sessionHash string) error {
 	if c.sessionBindings == nil {
 		return nil

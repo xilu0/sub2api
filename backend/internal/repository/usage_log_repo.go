@@ -3499,12 +3499,18 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 	if daysCount <= 0 {
 		daysCount = 30
 	}
+	last24End := timezone.Now()
+	last24Start := last24End.Add(-24 * time.Hour)
 
 	query := `
 		SELECT
 			TO_CHAR(created_at, 'YYYY-MM-DD') as date,
 			COUNT(*) as requests,
+			COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens,
+			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as tokens,
+			COALESCE(SUM(cache_creation_cost), 0) as cache_creation_cost,
+			COALESCE(SUM(cache_read_cost), 0) as cache_read_cost,
 			COALESCE(SUM(total_cost), 0) as cost,
 			COALESCE(SUM(total_cost * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost,
 			COALESCE(SUM(actual_cost), 0) as user_cost
@@ -3531,22 +3537,41 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 	for rows.Next() {
 		var date string
 		var requests int64
+		var cacheCreationTokens int64
+		var cacheReadTokens int64
 		var tokens int64
+		var cacheCreationCost float64
+		var cacheReadCost float64
 		var cost float64
 		var actualCost float64
 		var userCost float64
-		if err = rows.Scan(&date, &requests, &tokens, &cost, &actualCost, &userCost); err != nil {
+		if err = rows.Scan(
+			&date,
+			&requests,
+			&cacheCreationTokens,
+			&cacheReadTokens,
+			&tokens,
+			&cacheCreationCost,
+			&cacheReadCost,
+			&cost,
+			&actualCost,
+			&userCost,
+		); err != nil {
 			return nil, err
 		}
 		t, _ := time.Parse("2006-01-02", date)
 		history = append(history, AccountUsageHistory{
-			Date:       date,
-			Label:      t.Format("01/02"),
-			Requests:   requests,
-			Tokens:     tokens,
-			Cost:       cost,
-			ActualCost: actualCost,
-			UserCost:   userCost,
+			Date:                date,
+			Label:               t.Format("01/02"),
+			Requests:            requests,
+			Tokens:              tokens,
+			CacheCreationTokens: cacheCreationTokens,
+			CacheReadTokens:     cacheReadTokens,
+			Cost:                cost,
+			ActualCost:          actualCost,
+			UserCost:            userCost,
+			CacheCreationCost:   cacheCreationCost,
+			CacheReadCost:       cacheReadCost,
 		})
 	}
 	if err = rows.Err(); err != nil {
@@ -3555,6 +3580,7 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 
 	var totalAccountCost, totalUserCost, totalStandardCost float64
 	var totalRequests, totalTokens int64
+	var totalCacheCreationTokens, totalCacheReadTokens int64
 	var highestCostDay, highestRequestDay *AccountUsageHistory
 
 	for i := range history {
@@ -3564,6 +3590,8 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 		totalStandardCost += h.Cost
 		totalRequests += h.Requests
 		totalTokens += h.Tokens
+		totalCacheCreationTokens += h.CacheCreationTokens
+		totalCacheReadTokens += h.CacheReadTokens
 
 		if highestCostDay == nil || h.ActualCost > highestCostDay.ActualCost {
 			highestCostDay = h
@@ -3585,38 +3613,112 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 	}
 
 	summary := AccountUsageSummary{
-		Days:              daysCount,
-		ActualDaysUsed:    actualDaysUsed,
-		TotalCost:         totalAccountCost,
-		TotalUserCost:     totalUserCost,
-		TotalStandardCost: totalStandardCost,
-		TotalRequests:     totalRequests,
-		TotalTokens:       totalTokens,
-		AvgDailyCost:      totalAccountCost / float64(actualDaysUsed),
-		AvgDailyUserCost:  totalUserCost / float64(actualDaysUsed),
-		AvgDailyRequests:  float64(totalRequests) / float64(actualDaysUsed),
-		AvgDailyTokens:    float64(totalTokens) / float64(actualDaysUsed),
-		AvgDurationMs:     avgDuration,
+		Days:                        daysCount,
+		ActualDaysUsed:              actualDaysUsed,
+		TotalCost:                   totalAccountCost,
+		TotalUserCost:               totalUserCost,
+		TotalStandardCost:           totalStandardCost,
+		TotalRequests:               totalRequests,
+		TotalTokens:                 totalTokens,
+		TotalCacheCreationTokens:    totalCacheCreationTokens,
+		TotalCacheReadTokens:        totalCacheReadTokens,
+		AvgDailyCost:                totalAccountCost / float64(actualDaysUsed),
+		AvgDailyUserCost:            totalUserCost / float64(actualDaysUsed),
+		AvgDailyRequests:            float64(totalRequests) / float64(actualDaysUsed),
+		AvgDailyTokens:              float64(totalTokens) / float64(actualDaysUsed),
+		AvgDailyCacheCreationTokens: float64(totalCacheCreationTokens) / float64(actualDaysUsed),
+		AvgDailyCacheReadTokens:     float64(totalCacheReadTokens) / float64(actualDaysUsed),
+		CacheUtilizationRate:        calculateCacheUtilizationRate(totalCacheCreationTokens, totalCacheReadTokens),
+		AvgDurationMs:               avgDuration,
 	}
 
 	todayStr := timezone.Now().Format("2006-01-02")
 	for i := range history {
 		if history[i].Date == todayStr {
 			summary.Today = &struct {
-				Date     string  `json:"date"`
-				Cost     float64 `json:"cost"`
-				UserCost float64 `json:"user_cost"`
-				Requests int64   `json:"requests"`
-				Tokens   int64   `json:"tokens"`
+				Date                string  `json:"date"`
+				Cost                float64 `json:"cost"`
+				UserCost            float64 `json:"user_cost"`
+				Requests            int64   `json:"requests"`
+				Tokens              int64   `json:"tokens"`
+				CacheCreationTokens int64   `json:"cache_creation_tokens"`
+				CacheReadTokens     int64   `json:"cache_read_tokens"`
+				CacheCreationCost   float64 `json:"cache_creation_cost"`
+				CacheReadCost       float64 `json:"cache_read_cost"`
 			}{
-				Date:     history[i].Date,
-				Cost:     history[i].ActualCost,
-				UserCost: history[i].UserCost,
-				Requests: history[i].Requests,
-				Tokens:   history[i].Tokens,
+				Date:                history[i].Date,
+				Cost:                history[i].ActualCost,
+				UserCost:            history[i].UserCost,
+				Requests:            history[i].Requests,
+				Tokens:              history[i].Tokens,
+				CacheCreationTokens: history[i].CacheCreationTokens,
+				CacheReadTokens:     history[i].CacheReadTokens,
+				CacheCreationCost:   history[i].CacheCreationCost,
+				CacheReadCost:       history[i].CacheReadCost,
 			}
 			break
 		}
+	}
+
+	var last24Requests int64
+	var last24Tokens int64
+	var last24CacheCreationTokens int64
+	var last24CacheReadTokens int64
+	var last24Cost float64
+	var last24UserCost float64
+	var last24CacheCreationCost float64
+	var last24CacheReadCost float64
+	last24Query := `
+		SELECT
+			COUNT(*) as requests,
+			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as tokens,
+			COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens,
+			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
+			COALESCE(SUM(total_cost * COALESCE(account_rate_multiplier, 1)), 0) as cost,
+			COALESCE(SUM(actual_cost), 0) as user_cost,
+			COALESCE(SUM(cache_creation_cost), 0) as cache_creation_cost,
+			COALESCE(SUM(cache_read_cost), 0) as cache_read_cost
+		FROM usage_logs
+		WHERE account_id = $1 AND created_at >= $2 AND created_at < $3
+	`
+	if err := scanSingleRow(
+		ctx,
+		r.sql,
+		last24Query,
+		[]any{accountID, last24Start, last24End},
+		&last24Requests,
+		&last24Tokens,
+		&last24CacheCreationTokens,
+		&last24CacheReadTokens,
+		&last24Cost,
+		&last24UserCost,
+		&last24CacheCreationCost,
+		&last24CacheReadCost,
+	); err != nil {
+		return nil, err
+	}
+	summary.Last24Hours = &struct {
+		Date                 string  `json:"date"`
+		Cost                 float64 `json:"cost"`
+		UserCost             float64 `json:"user_cost"`
+		Requests             int64   `json:"requests"`
+		Tokens               int64   `json:"tokens"`
+		CacheCreationTokens  int64   `json:"cache_creation_tokens"`
+		CacheReadTokens      int64   `json:"cache_read_tokens"`
+		CacheCreationCost    float64 `json:"cache_creation_cost"`
+		CacheReadCost        float64 `json:"cache_read_cost"`
+		CacheUtilizationRate float64 `json:"cache_utilization_rate"`
+	}{
+		Date:                 last24End.Format(time.RFC3339),
+		Cost:                 last24Cost,
+		UserCost:             last24UserCost,
+		Requests:             last24Requests,
+		Tokens:               last24Tokens,
+		CacheCreationTokens:  last24CacheCreationTokens,
+		CacheReadTokens:      last24CacheReadTokens,
+		CacheCreationCost:    last24CacheCreationCost,
+		CacheReadCost:        last24CacheReadCost,
+		CacheUtilizationRate: calculateCacheUtilizationRate(last24CacheCreationTokens, last24CacheReadTokens),
 	}
 
 	if highestCostDay != nil {
@@ -4234,4 +4336,12 @@ func setToSlice(set map[int64]struct{}) []int64 {
 		out = append(out, id)
 	}
 	return out
+}
+
+func calculateCacheUtilizationRate(cacheCreationTokens, cacheReadTokens int64) float64 {
+	total := cacheCreationTokens + cacheReadTokens
+	if total <= 0 {
+		return 0
+	}
+	return float64(cacheReadTokens) / float64(total)
 }

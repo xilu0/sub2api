@@ -1366,9 +1366,13 @@ export interface AccountUsageHistory {
   label: string
   requests: number
   tokens: number
+  cache_creation_tokens: number
+  cache_read_tokens: number
   cost: number
   actual_cost: number // Account cost (account multiplier)
   user_cost: number // User/API key billed cost (group multiplier)
+  cache_creation_cost: number
+  cache_read_cost: number
 }
 
 export interface AccountUsageSummary {
@@ -1379,10 +1383,15 @@ export interface AccountUsageSummary {
   total_standard_cost: number
   total_requests: number
   total_tokens: number
+  total_cache_creation_tokens: number
+  total_cache_read_tokens: number
   avg_daily_cost: number // Account cost
   avg_daily_user_cost: number
   avg_daily_requests: number
   avg_daily_tokens: number
+  avg_daily_cache_creation_tokens: number
+  avg_daily_cache_read_tokens: number
+  cache_utilization_rate: number
   avg_duration_ms: number
   today: {
     date: string
@@ -1390,6 +1399,22 @@ export interface AccountUsageSummary {
     user_cost: number
     requests: number
     tokens: number
+    cache_creation_tokens: number
+    cache_read_tokens: number
+    cache_creation_cost: number
+    cache_read_cost: number
+  } | null
+  last_24h: {
+    date: string
+    cost: number
+    user_cost: number
+    requests: number
+    tokens: number
+    cache_creation_tokens: number
+    cache_read_tokens: number
+    cache_creation_cost: number
+    cache_read_cost: number
+    cache_utilization_rate: number
   } | null
   highest_cost_day: {
     date: string

@@ -288,7 +288,7 @@
         </div>
 
         <!-- Row 3: Token Stats -->
-        <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div class="grid grid-cols-1 gap-4 lg:grid-cols-4">
           <!-- Accumulated Tokens -->
           <div class="card p-4">
             <div class="mb-3 flex items-center gap-2">
@@ -315,6 +315,52 @@
                 <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
                   formatTokens(Math.round(stats.summary.avg_daily_tokens))
                 }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Cache Stats -->
+          <div class="card p-4">
+            <div class="mb-3 flex items-center gap-2">
+              <div class="rounded-lg bg-sky-100 p-1.5 dark:bg-sky-900/30">
+                <Icon name="database" size="sm" class="text-sky-600 dark:text-sky-400" />
+              </div>
+              <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
+                t('admin.accounts.stats.cacheStats')
+              }}</span>
+            </div>
+            <div class="space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{
+                  t('admin.accounts.stats.cacheCreated')
+                }}</span>
+                <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
+                  formatTokens(stats.summary.total_cache_creation_tokens)
+                }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{
+                  t('admin.accounts.stats.cacheRead')
+                }}</span>
+                <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
+                  formatTokens(stats.summary.total_cache_read_tokens)
+                }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{
+                  t('admin.accounts.stats.cacheUtilization')
+                }}</span>
+                <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
+                  formatPercent(stats.summary.cache_utilization_rate)
+                }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{
+                  t('admin.accounts.stats.dailyAvgTokens')
+                }}</span>
+                <span class="text-sm font-semibold text-gray-900 dark:text-white"
+                  >{{ formatTokens(Math.round(stats.summary.avg_daily_cache_creation_tokens + stats.summary.avg_daily_cache_read_tokens)) }}</span
+                >
               </div>
             </div>
           </div>
@@ -369,7 +415,7 @@
                   t('admin.accounts.stats.todayRequests')
                 }}</span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                  formatNumber(stats.summary.today?.requests || 0)
+                  formatNumber(stats.summary.last_24h?.requests || 0)
                 }}</span>
               </div>
               <div class="flex items-center justify-between">
@@ -377,7 +423,31 @@
                   t('admin.accounts.stats.todayTokens')
                 }}</span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                  formatTokens(stats.summary.today?.tokens || 0)
+                  formatTokens(stats.summary.last_24h?.tokens || 0)
+                }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{
+                  t('admin.accounts.stats.todayCacheCreated')
+                }}</span>
+                <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
+                  formatTokens(stats.summary.last_24h?.cache_creation_tokens || 0)
+                }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{
+                  t('admin.accounts.stats.todayCacheRead')
+                }}</span>
+                <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
+                  formatTokens(stats.summary.last_24h?.cache_read_tokens || 0)
+                }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{
+                  t('admin.accounts.stats.cacheUtilization')
+                }}</span>
+                <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
+                  formatPercent(stats.summary.last_24h?.cache_utilization_rate || 0)
                 }}</span>
               </div>
               <div class="flex items-center justify-between">
@@ -385,7 +455,7 @@
                   t('admin.accounts.stats.todayCost')
                 }}</span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >${{ formatCost(stats.summary.today?.cost || 0) }}</span
+                  >${{ formatCost(stats.summary.last_24h?.cost || 0) }}</span
                 >
               </div>
             </div>
@@ -709,5 +779,9 @@ const formatDuration = (ms: number): string => {
     return `${(ms / 1000).toFixed(2)}s`
   }
   return `${Math.round(ms)}ms`
+}
+
+const formatPercent = (value: number): string => {
+  return `${(value * 100).toFixed(1)}%`
 }
 </script>

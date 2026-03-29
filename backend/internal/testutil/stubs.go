@@ -97,6 +97,9 @@ func (c StubGatewayCache) SetSessionAccountID(_ context.Context, _ int64, _ stri
 func (c StubGatewayCache) RefreshSessionTTL(_ context.Context, _ int64, _ string, _ time.Duration) error {
 	return nil
 }
+func (c StubGatewayCache) SetSessionAccountIDIfBetter(_ context.Context, _ int64, _ string, _ int64, _ int, _ time.Duration) (bool, error) {
+	return true, nil
+}
 func (c StubGatewayCache) DeleteSessionAccountID(_ context.Context, _ int64, _ string) error {
 	return nil
 }

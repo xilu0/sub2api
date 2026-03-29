@@ -185,6 +185,9 @@ func (c *openAIWSStateStoreTimeoutProbeCache) RefreshSessionTTL(context.Context,
 	return nil
 }
 
+func (c *openAIWSStateStoreTimeoutProbeCache) SetSessionAccountIDIfBetter(_ context.Context, _ int64, _ string, _ int64, _ int, _ time.Duration) (bool, error) {
+	return true, nil
+}
 func (c *openAIWSStateStoreTimeoutProbeCache) DeleteSessionAccountID(ctx context.Context, _ int64, _ string) error {
 	if deadline, ok := ctx.Deadline(); ok {
 		c.deleteHasDeadline = true

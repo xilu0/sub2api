@@ -226,6 +226,13 @@ func (m *mockGatewayCacheForPlatform) RefreshSessionTTL(ctx context.Context, gro
 	return nil
 }
 
+func (m *mockGatewayCacheForPlatform) SetSessionAccountIDIfBetter(ctx context.Context, groupID int64, sessionHash string, accountID int64, priority int, ttl time.Duration) (bool, error) {
+	if m.sessionBindings == nil {
+		m.sessionBindings = make(map[string]int64)
+	}
+	m.sessionBindings[sessionHash] = accountID
+	return true, nil
+}
 func (m *mockGatewayCacheForPlatform) DeleteSessionAccountID(ctx context.Context, groupID int64, sessionHash string) error {
 	if m.sessionBindings == nil {
 		return nil
@@ -3410,8 +3417,11 @@ func TestGatewayService_PriorityPreemption(t *testing.T) {
 		require.Equal(t, int64(1), result.Account.ID, "应复用绑定的 priority=100 账号")
 	})
 
-	t.Run("粘性账号非最低优先级且低优先级有空位-抢占迁移", func(t *testing.T) {
-		// session 绑定在 priority=101，但 priority=100 有空余 → 抢占，迁移到 priority=100
+	t.Run("粘性账号非最低优先级且低优先级有空位-保留粘性复用缓存", func(t *testing.T) {
+		// 串行调度器设计：不做主动抢占，保留粘性会话以复用 KV 缓存。
+		// session 绑定在 priority=101（有空余），priority=100 也有空余。
+		// 期望：复用 priority=101 的粘性账号（缓存命中），不迁移到 priority=100。
+		// 新会话（无 sticky）才会从 priority=100 开始分配，逐步实现集中化。
 		repo := newRepo([]Account{
 			{ID: 1, Platform: PlatformAnthropic, Priority: 100, Status: StatusActive, Schedulable: true, Concurrency: 10},
 			{ID: 2, Platform: PlatformAnthropic, Priority: 101, Status: StatusActive, Schedulable: true, Concurrency: 10},
@@ -3436,12 +3446,12 @@ func TestGatewayService_PriorityPreemption(t *testing.T) {
 
 		result, err := svc.SelectAccountWithLoadAwareness(ctx, nil, "sess", "", nil, "")
 		require.NoError(t, err)
-		require.Equal(t, int64(1), result.Account.ID, "应迁移到 priority=100 账号")
-		require.Equal(t, int64(1), cache.sessionBindings["sess"], "session 应重新绑定到 priority=100 账号")
+		require.Equal(t, int64(2), result.Account.ID, "应保留粘性账号 priority=101 以复用缓存，不抢占迁移")
+		require.Equal(t, int64(2), cache.sessionBindings["sess"], "session 绑定应保持不变")
 	})
 
-	t.Run("粘性账号非最低优先级但低优先级满载-不抢占", func(t *testing.T) {
-		// session 绑定在 priority=101，priority=100 满载 → 不抢占，继续用 priority=101
+	t.Run("粘性账号非最低优先级但低优先级满载-保留粘性避免抖动", func(t *testing.T) {
+		// session 绑定在 priority=101，priority=100 满载 → 低优先级无空余，保留粘性，返回 priority=101
 		repo := newRepo([]Account{
 			{ID: 1, Platform: PlatformAnthropic, Priority: 100, Status: StatusActive, Schedulable: true, Concurrency: 10},
 			{ID: 2, Platform: PlatformAnthropic, Priority: 101, Status: StatusActive, Schedulable: true, Concurrency: 10},
@@ -3453,7 +3463,7 @@ func TestGatewayService_PriorityPreemption(t *testing.T) {
 		cfg.Gateway.Scheduling.LoadBatchEnabled = true
 		concurrencyCache := &mockConcurrencyCache{
 			loadMap: map[int64]*AccountLoadInfo{
-				1: {AccountID: 1, LoadRate: 100},
+				1: {AccountID: 1, LoadRate: 100}, // priority=100 满载
 				2: {AccountID: 2, LoadRate: 0},
 			},
 		}
@@ -3466,7 +3476,91 @@ func TestGatewayService_PriorityPreemption(t *testing.T) {
 
 		result, err := svc.SelectAccountWithLoadAwareness(ctx, nil, "sess", "", nil, "")
 		require.NoError(t, err)
-		require.Equal(t, int64(2), result.Account.ID, "priority=100 满载时应继续复用 priority=101 账号")
+		// 低优先级全满，hasCapacityAtLowerPriority=false，保留粘性 → 返回 priority=101 的 sticky 账号
+		require.Equal(t, int64(2), result.Account.ID, "priority=100 满载时应保留粘性，返回 priority=101")
+	})
+
+	t.Run("低优先级账号不支持当前模型-不应抢占sticky", func(t *testing.T) {
+		repo := newRepo([]Account{
+			{
+				ID:          1,
+				Platform:    PlatformAnthropic,
+				Priority:    100,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 10,
+				Credentials: map[string]any{
+					"model_mapping": map[string]any{
+						"claude-opus-*": "claude-opus-*",
+					},
+				},
+			},
+			{
+				ID:          2,
+				Platform:    PlatformAnthropic,
+				Priority:    101,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 10,
+			},
+		})
+		cache := &mockGatewayCacheForPlatform{
+			sessionBindings: map[string]int64{"sess": 2},
+		}
+		cfg := testConfig()
+		cfg.Gateway.Scheduling.LoadBatchEnabled = true
+		concurrencyCache := &mockConcurrencyCache{
+			loadMap: map[int64]*AccountLoadInfo{
+				1: {AccountID: 1, LoadRate: 0},
+				2: {AccountID: 2, LoadRate: 0},
+			},
+		}
+		svc := &GatewayService{
+			accountRepo:        repo,
+			cache:              cache,
+			cfg:                cfg,
+			concurrencyService: NewConcurrencyService(concurrencyCache),
+		}
+
+		result, err := svc.SelectAccountWithLoadAwareness(ctx, nil, "sess", "claude-sonnet-4-6", nil, "")
+		require.NoError(t, err)
+		require.Equal(t, int64(2), result.Account.ID, "低优先级账号不支持当前模型时应保留 sticky")
+	})
+
+	t.Run("抢占目标拿槽TOCTOU失败-应保留sticky避免打散", func(t *testing.T) {
+		repo := newRepo([]Account{
+			{ID: 1, Platform: PlatformAnthropic, Priority: 100, Status: StatusActive, Schedulable: true, Concurrency: 10},
+			{ID: 2, Platform: PlatformAnthropic, Priority: 101, Status: StatusActive, Schedulable: true, Concurrency: 10},
+			{ID: 3, Platform: PlatformAnthropic, Priority: 102, Status: StatusActive, Schedulable: true, Concurrency: 10},
+		})
+		cache := &mockGatewayCacheForPlatform{
+			sessionBindings: map[string]int64{"sess": 3},
+		}
+		cfg := testConfig()
+		cfg.Gateway.Scheduling.LoadBatchEnabled = true
+		concurrencyCache := &mockConcurrencyCache{
+			loadMap: map[int64]*AccountLoadInfo{
+				1: {AccountID: 1, LoadRate: 0},
+				2: {AccountID: 2, LoadRate: 0},
+				3: {AccountID: 3, LoadRate: 0},
+			},
+			acquireResults: map[int64]bool{
+				1: false, // 模拟最低优先级账号在高并发下被其他请求抢走
+				2: true,
+				3: true,
+			},
+		}
+		svc := &GatewayService{
+			accountRepo:        repo,
+			cache:              cache,
+			cfg:                cfg,
+			concurrencyService: NewConcurrencyService(concurrencyCache),
+		}
+
+		result, err := svc.SelectAccountWithLoadAwareness(ctx, nil, "sess", "", nil, "")
+		require.NoError(t, err)
+		require.Equal(t, int64(3), result.Account.ID, "抢占目标拿槽失败（TOCTOU）时应保留 sticky，不打散到 Layer 2")
+		require.Equal(t, int64(3), cache.sessionBindings["sess"], "TOCTOU 失败时 session 应保持原 sticky 账号")
 	})
 
 	t.Run("无粘性会话-新session直接走Layer2选最低优先级", func(t *testing.T) {

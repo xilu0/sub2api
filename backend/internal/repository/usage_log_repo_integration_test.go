@@ -1463,29 +1463,37 @@ func (s *UsageLogRepoSuite) TestGetAccountUsageStats() {
 
 	// Create logs on different days
 	log1 := &service.UsageLog{
-		UserID:       user.ID,
-		APIKeyID:     apiKey.ID,
-		AccountID:    account.ID,
-		Model:        "claude-3-opus",
-		InputTokens:  100,
-		OutputTokens: 200,
-		TotalCost:    0.5,
-		ActualCost:   0.4,
-		CreatedAt:    base.Add(12 * time.Hour),
+		UserID:              user.ID,
+		APIKeyID:            apiKey.ID,
+		AccountID:           account.ID,
+		Model:               "claude-3-opus",
+		InputTokens:         100,
+		OutputTokens:        200,
+		CacheCreationTokens: 10,
+		CacheReadTokens:     20,
+		CacheCreationCost:   0.03,
+		CacheReadCost:       0.01,
+		TotalCost:           0.5,
+		ActualCost:          0.4,
+		CreatedAt:           base.Add(12 * time.Hour),
 	}
 	_, err := s.repo.Create(s.ctx, log1)
 	s.Require().NoError(err)
 
 	log2 := &service.UsageLog{
-		UserID:       user.ID,
-		APIKeyID:     apiKey.ID,
-		AccountID:    account.ID,
-		Model:        "claude-3-sonnet",
-		InputTokens:  50,
-		OutputTokens: 100,
-		TotalCost:    0.2,
-		ActualCost:   0.15,
-		CreatedAt:    base.Add(36 * time.Hour), // next day
+		UserID:              user.ID,
+		APIKeyID:            apiKey.ID,
+		AccountID:           account.ID,
+		Model:               "claude-3-sonnet",
+		InputTokens:         50,
+		OutputTokens:        100,
+		CacheCreationTokens: 5,
+		CacheReadTokens:     15,
+		CacheCreationCost:   0.02,
+		CacheReadCost:       0.005,
+		TotalCost:           0.2,
+		ActualCost:          0.15,
+		CreatedAt:           base.Add(36 * time.Hour), // next day
 	}
 	_, err = s.repo.Create(s.ctx, log2)
 	s.Require().NoError(err)
@@ -1498,7 +1506,14 @@ func (s *UsageLogRepoSuite) TestGetAccountUsageStats() {
 
 	s.Require().Len(resp.History, 2, "expected 2 days of history")
 	s.Require().Equal(int64(2), resp.Summary.TotalRequests)
-	s.Require().Equal(int64(450), resp.Summary.TotalTokens)
+	s.Require().Equal(int64(500), resp.Summary.TotalTokens)
+	s.Require().Equal(int64(15), resp.Summary.TotalCacheCreationTokens)
+	s.Require().Equal(int64(35), resp.Summary.TotalCacheReadTokens)
+	s.Require().InDelta(0.7, resp.Summary.CacheUtilizationRate, 0.0001)
+	s.Require().Equal(int64(10), resp.History[0].CacheCreationTokens)
+	s.Require().Equal(int64(20), resp.History[0].CacheReadTokens)
+	s.Require().Equal(0.03, resp.History[0].CacheCreationCost)
+	s.Require().Equal(0.01, resp.History[0].CacheReadCost)
 	s.Require().Len(resp.Models, 2)
 }
 
@@ -1514,6 +1529,10 @@ func (s *UsageLogRepoSuite) TestGetAccountUsageStats_EmptyRange() {
 
 	s.Require().Len(resp.History, 0)
 	s.Require().Equal(int64(0), resp.Summary.TotalRequests)
+	s.Require().Equal(int64(0), resp.Summary.TotalCacheCreationTokens)
+	s.Require().Equal(int64(0), resp.Summary.TotalCacheReadTokens)
+	s.Require().NotNil(resp.Summary.Last24Hours)
+	s.Require().InDelta(0.0, resp.Summary.Last24Hours.CacheUtilizationRate, 0.0001)
 }
 
 // --- GetUserUsageTrend ---
